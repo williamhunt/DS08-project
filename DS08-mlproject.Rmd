@@ -1,0 +1,107 @@
+---
+title: "DS08 Machine Learning Project"
+author: "William Hunt"
+date: "December 20, 2015"
+output: html_document
+---
+##DS08 Machine Learning Project - Modeling Dumbbell Data
+
+###Introduction
+This document decribes a machine learning project to satisfy the requirements of the course project for the Practical Machine Learning course taught by Jeff Leek, Roger D. Peng, and Brian Caffo at the John Hopkins Bloomberg School of Public Health.  
+
+Digital devices such as *Fitbit* and Nike *FuelBand* collect large amounts of data through their sensors. In this project the data from 6 participants doing weightlifting using dumbbells are analyzed to predict which of five ways of lifting (1 correct and 4 incorrect) was performed. A machine learning model was built and tested.
+
+###Model Building Process
+####General Model Considerations
+I use the standard model for machine learning:
+
+1. Formulate a **question** approachable by the data
+2. Collect the **input data**
+3. Examine the data and choose which **features** to use in the model
+4. Pick an **algorithm** or algorithms to use on the features and run it on a training set of data
+5. Tune any **parameters** of the algorithm to the most promising fit
+6. Do an **evaluation** of the results using the testing set of data
+
+Given the scope of the project (making 20 predictions), I chose accuracy over speed, simplicity, and scalability. Interpretability was paraddressed in the evaluation.
+
+###General Data Considerations
+There were five ways of lifting:
+
+- A Correct lifting
+- B Throwing elbows forward
+- C Lifting only half-way
+- D Lowering only half-way
+- E Throwing hips forward
+
+The sensory data came from sensors on the bicep, forearm, waist, and dumbbells with raw measures and derived dynamic measures (e.g., acceleration) for a total of 152 measures. 
+The remaining variables including name, time factors, window variables, and the dependent classe variable brought the total to 160 features.
+There were 19622 instances (rows) of data.
+
+####Description of the Process
+I am modeling a person lifting dumbbells. and followed the process above. The question is: given a set of (sensor) values, which of the 5 ways of lifting (A, B, C, D, E) did the lifter perform? 
+After examining the data and counting missing values I discovered that the sensor variables divide into 52 variables with 19622 values and 100 variables with only 406 values! I initially did a correlation matrix on the 52 variables to compress the data (fewer variables). However, with so many data points (19622), I keep all 52 complete sensor variables as features in the model for training.
+
+```{r}
+## Read in activity data
+WLdata <- read.csv("./data/pml-training.csv", na.strings = c("",NaN,NA))
+WLvars <- WLdata[,-c(1:7)]
+na_count <-sapply(WLvars, function(y) sum(length(which(is.na(y)))))
+na_count <- data.frame(na_count)
+WLvars53 <- WLvars[,na_count == 0]
+WLvars52 <- WLvars53[,-53]
+```
+
+
+###Building the Algorithm
+There are so many choices for algorithms for predictors or classifiers. In 2014 several researchers published a 49 page article  comparing 179 classifiers from 17 families on 121 data sets. [DelgadoEtAl Paper](http://jmlr.csail.mit.edu/papers/volume15/delgado14a/delgado14a.pdf) A key result was that random forest algorithms came out on top through multiple analyzes. If fact, variations of the r programs randomForest and rf in caret were at the very top. I initially chose random forests based on the lecture material and this mammoth article confirmed the choice. 
+
+###Cross Validation and Out of Sample Error Estimates
+Using random forests means that cross validation and out of sample error estimates are taken. (See [Random Forests website](https://www.stat.berkeley.edu/~breiman/RandomForests/cc_home.htm).) To paraphrase, each tree is constructed using a different sample and the out-of-sample (called out-of-bag, or OOB) cases are used to test, not construct the tree. The votes are averaged to get the OOB estimate. So the cross-validation occurs by constructing multiple trees based on different cases and internally tested on different cases.  This has proven to be unbiased in many tests. More details including the OOB error estimate is provided in the Evaluation section.
+
+###Parameters
+First I used the caret package and the train function. The *classe* variable was trained against the 52 sensor variables with lots of values. After reading many forum discussions, I decided to turn the *proximity* parameter off. The run took around 2 hours. That’s all the tuning I did.
+```{r}
+#library(kernlab)
+#library(caret)
+#modFit1 <- train(classe ~., data=WLvars53, method="rf", prox=FALSE)
+#saveRDS(modFit1,"model01-rftrain-alltraining.rds")
+#modFit1 <- readRDS("model01-rftrain-alltraining.rds")
+```
+
+Further forum discussions suggested that the randomForest package was faster. I first tried it with proximity=TRUE and it crashed trying to make a vector using around 2GB of memory. I shut down lots of processes, however, it kept crashing. My machine has 8GB of memory, at least 6GB available however the randomForest function kept using it up. I turned off *proximity* and everything worked smoothly in less than 20 minutes. 
+
+I saved both models and read them back in to avoid rerunning the model.
+```{r}
+library(randomForest)
+#modFit2 <- randomForest(classe ~., data = WLvars53, proximity=FALSE)
+#saveRDS(modFit2,"model02-rftrain-alltraining.rds")
+modFit2 <- readRDS("model02-rftrain-alltraining.rds")
+```
+
+###Evaluation
+####OOB Error and Confusion Matrix
+I used the randomForest functions to produce a confusion matrix and determine the estimated OOB error rate. (As stated earlier, this is the same as the out of sample error estimate.) As shown in the matrix, the vast majority of the values are on the diagonal. The calculation of the estimated OOB error rate is based on the accumulation of all the trees to date as more trees are constructed. I also plotted these showing the dramatic drop and rapid convergence to 0.3% estimated out of bag error rate.
+
+```{r}
+modFit2$confusion
+modFit2$err.rate[modFit2$ntree,1]
+plot(modFit2$err.rate[,1], xlab = "Number of Trees",ylab = "Estimated OOB Error Rate")
+abline(h=0.003, col = "red")
+text(x=0,y=0.005, "0.003", col = "red" )
+```
+
+####Top Important Factors
+To better understand the model I plotted the top 10 most important factors in prediction.
+```{r}
+varImpPlot(modFit2, n.var = 12, main = "Top 12 Important Factors" )
+```
+
+This is measured using the mean decrease in the Gini index, a measure of inequality in distributions, i.e., splitting at each decision node. From this plot the belt roll movement is by far the most important. Other belt movements as well as the dumbbell magnetometer positions account for half of the positions. If data compression were important, around 10 factors would work because the plot shows a reduced rate of benefit at this point. 
+
+###Test Data Results
+I ran the test data on both models and they produced the same results on the 20 samples. I submitted these results and they were all correct. This is no surprise with an estimated OOB error rate of 0.3%, 3 in 1000. 
+
+```{r}
+#testresult1 <- predict(modFit1,WLtestdata)
+#testresult2 <- predict(modFit2,WLtestdata)
+```
